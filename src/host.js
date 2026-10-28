@@ -14,7 +14,7 @@ import { homedir } from 'node:os'
 import { spawn } from 'node:child_process'
 
 export const name = 'breeze-tts'
-export const inject = []
+export const inject = ['webServer']
 
 const DEFAULTS = {
   enabled: true,
