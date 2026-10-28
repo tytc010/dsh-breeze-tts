@@ -24,7 +24,14 @@ const DEFAULTS = {
   instruction: '',
   prewarm: true,
   firstCallTimeoutMs: 110000,
-  timeoutMs: 90000
+  timeoutMs: 90000,
+  // 提速：cfg_scale 4.0 会让模型跑两遍（有/无条件各一次），1.0 省掉一半
+  cfgScale: 4,
+  // 缩短语音条后不需要 1500，600 足够 30 字
+  maxNewTokens: 600,
+  // 同文本缓存：重复句子直接回放
+  cacheSize: 300,
+  cacheMaxBytes: 60 * 1024 * 1024
 }
 
 function dshHome() {
@@ -195,7 +202,7 @@ export function createBridge(config, log = () => {}) {
     }
   }
 
-  async function synthesize({ text, voiceId, instruction, mode }) {
+  async function synthesize({ text, voiceId, instruction, mode, cfgScale, maxNewTokens }) {
     const port = await discover()
     if (!port) {
       const err = new Error('Breeze 后端没在运行（先打开 T8star-Aix Voice Studio）')
@@ -207,6 +214,8 @@ export function createBridge(config, log = () => {}) {
       mode: mode || cfg.mode || 'design',
       instruction: instruction || cfg.instruction || '',
       voice_id: voiceId || cfg.voiceId || '',
+      cfg_scale: Number(cfgScale || cfg.cfgScale || 4),
+      max_new_tokens: Number(maxNewTokens || cfg.maxNewTokens || 600),
       stream_audio: true
     }
     const timeoutMs = modelLoaded ? cfg.timeoutMs : cfg.firstCallTimeoutMs
@@ -268,6 +277,35 @@ export function createBridge(config, log = () => {}) {
     })
   }
 
+  // ---- 同文本缓存（LRU，按 text+音色+参数）----
+  const cache = new Map()
+  const cacheOrder = []
+  let cacheBytes = 0
+  let cacheHits = 0
+  let cacheMisses = 0
+
+  function cacheGet(key) {
+    const hit = cache.get(key)
+    if (!hit) return null
+    const idx = cacheOrder.indexOf(key)
+    if (idx >= 0) { cacheOrder.splice(idx, 1); cacheOrder.push(key) }
+    return hit
+  }
+
+  function cachePut(key, buf) {
+    if (!cfg.cacheSize || cfg.cacheSize <= 0) return
+    if (cache.has(key)) return
+    cache.set(key, buf)
+    cacheOrder.push(key)
+    cacheBytes += buf.length
+    while (cacheOrder.length > cfg.cacheSize || cacheBytes > cfg.cacheMaxBytes) {
+      const old = cacheOrder.shift()
+      const b = cache.get(old)
+      if (b) cacheBytes -= b.length
+      cache.delete(old)
+    }
+  }
+
   const enqueue = (task) => {
     const next = chain.then(task, task)
     chain = next.catch(() => {})
@@ -291,7 +329,10 @@ export function createBridge(config, log = () => {}) {
         backend: port ? `127.0.0.1:${port}` : null,
         modelLoaded,
         voiceId: cfg.voiceId || null,
-        mode: cfg.mode
+        mode: cfg.mode,
+        cfgScale: cfg.cfgScale,
+        maxNewTokens: cfg.maxNewTokens,
+        cache: { entries: cache.size, bytes: cacheBytes, hits: cacheHits, misses: cacheMisses }
       })
     }
 
@@ -316,6 +357,8 @@ export function createBridge(config, log = () => {}) {
           if (typeof patch.voiceId === 'string') cfg.voiceId = patch.voiceId
           if (typeof patch.mode === 'string') cfg.mode = patch.mode
           if (typeof patch.instruction === 'string') cfg.instruction = patch.instruction
+          if (Number.isFinite(Number(patch.cfgScale))) cfg.cfgScale = Number(patch.cfgScale)
+          if (Number.isFinite(Number(patch.maxNewTokens))) cfg.maxNewTokens = Number(patch.maxNewTokens)
           saveConfig(cfg)
           writeLog(`配置更新 voice=${cfg.voiceId || '默认'} mode=${cfg.mode}`)
           return json(res, 200, { ok: true, config: cfg })
@@ -339,9 +382,21 @@ export function createBridge(config, log = () => {}) {
       const voiceId = url.searchParams.get('voice') || url.searchParams.get('voice_id') || ''
       const instruction = url.searchParams.get('instruct') || url.searchParams.get('instruction') || ''
       const mode = url.searchParams.get('mode') || ''
+      const cfgScale = Number(url.searchParams.get('cfg') || cfg.cfgScale || 4)
+      const maxNewTokens = Number(url.searchParams.get('max_tokens') || cfg.maxNewTokens || 600)
+      const key = [voiceId || cfg.voiceId || '', mode || cfg.mode || 'design', instruction || cfg.instruction || '', cfgScale, maxNewTokens, text].join('|')
       try {
-        const { pcm, sampleRate } = await enqueue(() => synthesize({ text, voiceId, instruction, mode }))
+        const cached = cacheGet(key)
+        if (cached) {
+          cacheHits++
+          writeLog(`缓存命中（${text.length} 字）`)
+          res.writeHead(200, { 'content-type': 'audio/wav', 'content-length': cached.length, 'cache-control': 'no-store' })
+          return res.end(cached)
+        }
+        cacheMisses++
+        const { pcm, sampleRate } = await enqueue(() => synthesize({ text, voiceId, instruction, mode, cfgScale, maxNewTokens }))
         const wav = pcmToWav(pcm, sampleRate)
+        cachePut(key, wav)
         res.writeHead(200, { 'content-type': 'audio/wav', 'content-length': wav.length, 'cache-control': 'no-store' })
         return res.end(wav)
       } catch (e) {
