@@ -7,6 +7,8 @@
   "main": "src/host.js",
   "exports": {
     ".": "./src/host.js",
+    "./client": "./client/client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
     "./package.json": "./package.json"
   },
   "files": [
