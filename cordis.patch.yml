@@ -1,0 +1,14 @@
+# dsh-breeze-tts —— 把桥接插件插入 profile
+# 端口固定 9880，Aurabot 的「通用 TTS」地址不用改：http://127.0.0.1:9880/tts?text={text}
+- insert:
+    - id: breeze-tts
+      name: 'dsh-breeze-tts'
+      config:
+        enabled: true
+        port: 9880
+        voiceId: 'd00d70c6fc4a4706887e86c26c774314'
+        mode: design
+        instruction: ''
+        prewarm: true
+        firstCallTimeoutMs: 110000
+        timeoutMs: 90000

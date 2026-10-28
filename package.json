@@ -1,0 +1,32 @@
+{
+  "name": "dsh-breeze-tts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Breeze TTS 桥接插件：把 T8star-Aix Voice Studio 的语音合成接进 DSH / Aurabot",
+  "type": "module",
+  "main": "src/host.js",
+  "exports": {
+    ".": "./src/host.js",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "client",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "keywords": ["dsh-plugin", "tts", "breeze"],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": ["slots"],
+      "external": ["react"]
+    }
+  },
+  "engines": {
+    "node": ">=22.13.0"
+  }
+}
