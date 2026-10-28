@@ -179,26 +179,48 @@ export function createBridge(config, log = () => {}) {
     log(line.trim())
   }
 
+  let warmedUp = false
+
   async function prewarm(port) {
-    if (modelLoaded || !cfg.prewarm) return
+    if (!cfg.prewarm) return
+    // 1) 模型是否在显存里；没有就加载
     try {
       const st = await fetch(`http://127.0.0.1:${port}/api/runtime`, { signal: AbortSignal.timeout(3000) })
         .then((r) => r.json()).catch(() => null)
       if (st && st.loaded) {
         modelLoaded = true
-        return
+      } else {
+        const started = Date.now()
+        const r = await fetch(`http://127.0.0.1:${port}/api/runtime/load`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ fast_all: false, max_new_tokens: cfg.maxNewTokens || 600 }),
+          signal: AbortSignal.timeout(180000)
+        })
+        modelLoaded = r.ok
+        writeLog(`预加载${r.ok ? '完成' : '失败'}，${((Date.now() - started) / 1000).toFixed(1)} 秒`)
       }
-      const started = Date.now()
-      const r = await fetch(`http://127.0.0.1:${port}/api/runtime/load`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ fast_all: false, max_new_tokens: 1500 }),
-        signal: AbortSignal.timeout(180000)
-      })
-      modelLoaded = r.ok
-      writeLog(`预加载${r.ok ? '完成' : '失败'}，${((Date.now() - started) / 1000).toFixed(1)} 秒`)
     } catch (e) {
       writeLog('预加载失败：' + e.message)
+      return
+    }
+
+    // 2) 预热一次真实推理：捕获 CUDA 图，避免用户第一句等 40+ 秒
+    if (warmedUp || !modelLoaded) return
+    warmedUp = true
+    try {
+      const started = Date.now()
+      await synthesize({
+        text: '嗯',
+        voiceId: cfg.voiceId,
+        instruction: '',
+        mode: cfg.mode,
+        cfgScale: cfg.cfgScale,
+        maxNewTokens: 64
+      })
+      writeLog(`推理预热完成，${((Date.now() - started) / 1000).toFixed(1)} 秒`)
+    } catch (e) {
+      writeLog('推理预热失败：' + e.message)
     }
   }
 
